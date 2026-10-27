@@ -68,6 +68,11 @@ class HttpError extends Error {
 const fixCors = ({ headers, status, statusText }) => {
   headers = new Headers(headers);
   headers.set("Access-Control-Allow-Origin", "*");
+  // Bodies built here are already decoded plain text/JSON. Leaving upstream
+  // Content-Encoding/Content-Length in place makes strict HTTP clients gunzip
+  // an already-plain body and fail with Z_DATA_ERROR / "non-JSON body".
+  headers.delete("Content-Encoding");
+  headers.delete("Content-Length");
   return { headers, status, statusText };
 };
 
