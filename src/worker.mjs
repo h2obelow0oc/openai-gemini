@@ -1,5 +1,18 @@
 import { Buffer } from "node:buffer";
 
+// ===== Key Pool Rotation (INJECTED) =====
+const KEY_POOL = [
+  process.env.GEMINI_API_KEY_1,
+  process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3,
+  process.env.GEMINI_API_KEY_4,
+].filter(Boolean);
+
+function pickKey() {
+  return KEY_POOL[Math.floor(Math.random() * KEY_POOL.length)];
+}
+// ===== End Injection =====
+
 export default {
   async fetch (request) {
     if (request.method === "OPTIONS") {
@@ -18,18 +31,22 @@ export default {
         }
       };
       const { pathname } = new URL(request.url);
+      
+      // Pick a random key from pool for upstream Google API
+      const upstreamKey = pickKey();
+      
       switch (true) {
         case pathname.endsWith("/chat/completions"):
           assert(request.method === "POST");
-          return handleCompletions(await request.json(), apiKey)
+          return handleCompletions(await request.json(), upstreamKey)
             .catch(errHandler);
         case pathname.endsWith("/embeddings"):
           assert(request.method === "POST");
-          return handleEmbeddings(await request.json(), apiKey)
+          return handleEmbeddings(await request.json(), upstreamKey)
             .catch(errHandler);
         case pathname.endsWith("/models"):
           assert(request.method === "GET");
-          return handleModels(apiKey)
+          return handleModels(upstreamKey)
             .catch(errHandler);
         default:
           throw new HttpError("404 Not Found", 404);
