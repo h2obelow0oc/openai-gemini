@@ -298,6 +298,14 @@ const adjustProps = (schemaPart) => {
       delete schemaPart[key];
     }
   }
+  // Google types Schema.enum as repeated string. OpenAI accepts numeric or
+  // boolean enums, which Google then rejects with
+  // "Invalid value at '...enum[0]' (TYPE_STRING), 3". Stringify every entry.
+  if (Array.isArray(schemaPart.enum)) {
+    schemaPart.enum = schemaPart.enum.map((entry) =>
+      typeof entry === "string" ? entry : JSON.stringify(entry)
+    );
+  }
   // Recurse into every remaining value (properties / items / nested objects).
   for (const value of Object.values(schemaPart)) {
     adjustProps(value);
