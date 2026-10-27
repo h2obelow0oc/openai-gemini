@@ -248,17 +248,59 @@ async function handleCompletions (req, apiKey) {
   return new Response(body, fixCors(response));
 }
 
+// Fields Google's function_declarations schema does not accept. They are
+// valid JSON Schema (OpenAI style) but Google rejects the whole request with
+// "Unknown name X" as soon as one shows up anywhere in the tree.
+const UNSUPPORTED_SCHEMA_KEYS = [
+  "additionalProperties",
+  "$schema",
+  "$id",
+  "$ref",
+  "$defs",
+  "definitions",
+  "strict",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "const",
+  "examples",
+  "deprecated",
+  "readOnly",
+  "writeOnly",
+  "contentEncoding",
+  "contentMediaType",
+  "if",
+  "then",
+  "else",
+  "not",
+  "allOf",
+  "anyOf",
+  "oneOf",
+  "patternProperties",
+  "propertyNames",
+  "dependencies",
+  "dependentRequired",
+  "dependentSchemas",
+  "unevaluatedProperties",
+  "unevaluatedItems",
+];
+
 const adjustProps = (schemaPart) => {
   if (typeof schemaPart !== "object" || schemaPart === null) {
     return;
   }
   if (Array.isArray(schemaPart)) {
+    // function_declarations is an array of {name, description, parameters}
     schemaPart.forEach(adjustProps);
-  } else {
-    if (schemaPart.type === "object" && schemaPart.properties && schemaPart.additionalProperties === false) {
-      delete schemaPart.additionalProperties;
+    return;
+  }
+  for (const key of UNSUPPORTED_SCHEMA_KEYS) {
+    if (key in schemaPart) {
+      delete schemaPart[key];
     }
-    Object.values(schemaPart).forEach(adjustProps);
+  }
+  // Recurse into every remaining value (properties / items / nested objects).
+  for (const value of Object.values(schemaPart)) {
+    adjustProps(value);
   }
 };
 const adjustSchema = (schema) => {
