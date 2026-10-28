@@ -498,8 +498,11 @@ const transformFnCalls = ({ tool_calls, extra_content }) => {
         args,
       },
     };
+    // Fix: Google API requires thought_signature (snake_case) INSIDE functionCall,
+    // not thoughtSignature (camelCase) at part root level.
+    // See: https://github.com/google-gemini/gemini-cli/issues/28697
     const sig = tc?.google?.thought_signature ?? msgSig;
-    if (sig) { out.thoughtSignature = sig; }
+    if (sig) { out.functionCall.thought_signature = sig; }
     return out;
   });
   parts.calls = calls;
