@@ -489,8 +489,11 @@ const transformFnCalls = ({ tool_calls, extra_content }) => {
   return parts;
 };
 
-const transformMsg = async ({ content, extra_content }) => {
-  const thoughtSignature = extra_content?.google?.thought_signature;
+const transformMsg = async ({ content, extra_content, tool_calls }) => {
+  // tool_calls parts are handled separately by transformFnCalls; when they
+  // carry no per-call signature, fall back to the message-level one.
+  const hasCallSig = tool_calls?.some(tc => tc.extra_content?.google?.thought_signature);
+  const thoughtSignature = extra_content?.google?.thought_signature && !hasCallSig ? extra_content.google.thought_signature : undefined;
   const parts = [];
   if (!Array.isArray(content)) {
     // system, user: string
@@ -570,7 +573,7 @@ const transformMessages = async (messages) => {
     }
     contents.push({
       role: item.role,
-      parts: item.tool_calls ? transformFnCalls(item, item.extra_content) : await transformMsg(item)
+      parts: item.tool_calls ? transformFnCalls(item, item.extra_content) : await transformMsg(item, item.tool_calls)
     });
   }
   if (system_instruction) {
