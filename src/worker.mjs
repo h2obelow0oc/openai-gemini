@@ -1,15 +1,36 @@
 import { Buffer } from "node:buffer";
 
 // ===== Key Pool Rotation (INJECTED) =====
-const KEY_POOL = [
-  process.env.GEMINI_API_KEY_1,
-  process.env.GEMINI_API_KEY_2,
-  process.env.GEMINI_API_KEY_3,
-  process.env.GEMINI_API_KEY_4,
-].filter(Boolean);
+// GEMINI_API_KEY_1.._50, whatever is actually configured. The old hardcoded
+// _1.._4 list silently ignored _5.._8 that were already set in Render, so a
+// "8 project" pool behaved like a 4 project pool — halving FREE-tier quota
+// (20 RPD per project per model) with nothing in the logs to show for it.
+const KEY_POOL = Object.keys(process.env)
+  .map((name) => (/^GEMINI_API_KEY_(\d+)$/.exec(name) ?? [])[1])
+  .filter((index) => index !== undefined)
+  .sort((a, b) => Number(a) - Number(b))
+  .map((index) => process.env[`GEMINI_API_KEY_${index}`])
+  .filter((key) => typeof key === "string" && key.trim() !== "");
+
+// Round-robin instead of random: with 20 RPD per project, random selection
+// keeps landing on an already-exhausted key while fresh ones sit unused.
+// A cursor survives across requests in the same instance.
+let keyCursor = Math.floor(Math.random() * Math.max(1, KEY_POOL.length));
 
 function pickKey() {
-  return KEY_POOL[Math.floor(Math.random() * KEY_POOL.length)];
+  if (KEY_POOL.length === 0) return undefined;
+  const key = KEY_POOL[keyCursor % KEY_POOL.length];
+  keyCursor = (keyCursor + 1) % KEY_POOL.length;
+  return key;
+}
+
+// Every key except the ones already tried, for the 429 failover below.
+function nextKey(exclude = new Set()) {
+  for (let step = 0; step < KEY_POOL.length; step += 1) {
+    const key = pickKey();
+    if (key !== undefined && !exclude.has(key)) return key;
+  }
+  return undefined;
 }
 // ===== End Injection =====
 
@@ -204,11 +225,35 @@ async function handleCompletions (req, apiKey) {
   const TASK = req.stream ? "streamGenerateContent" : "generateContent";
   let url = `${BASE_URL}/${API_VERSION}/models/${model}:${TASK}`;
   if (req.stream) { url += "?alt=sse"; }
-  const response = await fetch(url, {
-    method: "POST",
-    headers: makeHeaders(apiKey, { "Content-Type": "application/json" }),
-    body: JSON.stringify(body),
-  });
+
+  // ── 429 failover across keys ────────────────────────────────────────────
+  // Free-tier quota is per PROJECT per MODEL (20 RPD on the free tier). A 429
+  // means *this project* is out of budget for *this model* today — the other
+  // projects are untouched, and a refused request consumes nothing. Walking
+  // the pool is therefore free and turns "some projects exhausted" into
+  // "still works, slower".
+  //
+  // Only 429 is retried. A 5xx (503 UNAVAILABLE = model overloaded) DOES
+  // consume quota (measured: 41 consecutive 503s then 429 on the same model),
+  // so retrying it would burn 20 RPD six times faster for no benefit. It is
+  // passed through for the caller to decide.
+  const tried = new Set();
+  let currentKey = apiKey;
+  let response;
+  for (;;) {
+    tried.add(currentKey);
+    response = await fetch(url, {
+      method: "POST",
+      headers: makeHeaders(currentKey, { "Content-Type": "application/json" }),
+      body: JSON.stringify(body),
+    });
+    if (response.status !== 429 || tried.size >= KEY_POOL.length) break;
+    const alternative = nextKey(tried);
+    if (alternative === undefined) break;
+    // Drain the body so the connection is released before the next attempt.
+    await response.text().catch(() => "");
+    currentKey = alternative;
+  }
 
   body = response.body;
   if (response.ok) {
