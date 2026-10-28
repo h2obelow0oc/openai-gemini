@@ -199,17 +199,28 @@ API key rejected by provider (HTTP 403): <!DOCTYPE html>...<title>Blocked</title
 5. `POST /git/commits`（parents = 远端头）
 6. `PATCH /git/refs/heads/main`
 
-脚本见 `/tmp/push_api.mjs`。PAT 在 `.agents/skills/apk-decompile-gh/pat.txt`。
+脚本见 `.agents/skills/dsh-session-query/`(同目录 `decode.mjs` 思路)。推送可用 `tools/git-push-api.mjs`（见下 §十一）。PAT 在 `.agents/skills/apk-decompile-gh/pat.txt`。
 
 ---
 
 ## 十、会话日志解压方法（本次关键工具）
 
 DSH 会话日志为**多帧 zstd**，`zstd` 命令在本机不可用，且单次 `zstdDecompressSync` 只解第一帧。
-正确做法：按 `28 b5 2f fd` 魔数逐帧定位并解压，脚本见 `/tmp/dec.mjs`：
+正确做法：按 `28 b5 2f fd` 魔数逐帧定位并解压。**已封装为 skill**：`dsh-session-query`（`.agents/skills/dsh-session-query/decode.mjs`），直接用：
 
 ```bash
-node /tmp/dec.mjs /root/.dsh/sessions/--sdcard-deep--/<session-id>/session.v4.jsonl.zstd > /tmp/s.jsonl
+node {{WS}}/.agents/skills/dsh-session-query/decode.mjs \\
+  /root/.dsh/sessions/--sdcard-deep--/<session-id>/session.v4.jsonl.zstd > /tmp/s.jsonl
 ```
 
 **这是本次能定位到「签名根本没存下来」的关键手段，排查此类问题应第一步就做。**
+
+---
+
+## 十一、GitHub 推送脚本（归档版）
+
+`/tmp` 会在重启后丢失，推送脚本已归档到 **`tools/git-push-api.mjs`**（工作区根下）。
+用法：`node {{WS}}/tools/git-push-api.mjs <仓库本地路径>`，自动读 PAT、重建子树、推送。
+
+它会做：取远端头 → 上传改动文件 blob → 重建 `src`/根树 → 建 commit → PATCH ref。
+适用 `git push` 直连 443 被墙的情况（本机常见）。
