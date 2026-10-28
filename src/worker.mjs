@@ -490,6 +490,15 @@ const transformFnCalls = ({ tool_calls, extra_content }) => {
       console.error("Error parsing function arguments:", err);
       throw new HttpError("Invalid function arguments: " + argstr, 400);
     }
+    // Lift the smuggled signature back out of `arguments` (see the response
+    // side): the model must never see this reserved key, and the signature
+    // must sit on the part itself where Google expects it.
+    const SIGNATURE_KEY = "__thought_signature";
+    let smuggled;
+    if (args !== null && typeof args === "object" && !Array.isArray(args) && SIGNATURE_KEY in args) {
+      smuggled = args[SIGNATURE_KEY];
+      delete args[SIGNATURE_KEY];
+    }
     calls[id] = {i, name};
     const out = {
       functionCall: {
@@ -498,7 +507,7 @@ const transformFnCalls = ({ tool_calls, extra_content }) => {
         args,
       },
     };
-    const sig = tc?.google?.thought_signature ?? msgSig;
+    const sig = smuggled ?? tc?.google?.thought_signature ?? msgSig;
     if (sig) { out.thoughtSignature = sig; }
     return out;
   });
@@ -648,12 +657,22 @@ function transformCandidates (key, cand) {
       const fc = part.functionCall;
       message.tool_calls ??= [];
       const thought_signature = part.thoughtSignature ?? fc.thoughtSignature;
+      // Signature smuggling: OpenAI-compatible clients (and pi-ai's
+      // openai-completions wire) drop `extra_content`, so the signature would
+      // never come back on the next turn and Google rejects the replay with
+      // "Function call is missing a thought_signature". `arguments` is the ONE
+      // field every client round-trips verbatim, so the signature rides inside
+      // it under a reserved key and transformFnCalls lifts it back out.
+      const SIGNATURE_KEY = "__thought_signature";
+      const argsOut = thought_signature
+        ? { ...fc.args, [SIGNATURE_KEY]: thought_signature }
+        : fc.args;
       message.tool_calls.push({
         id: fc.id ?? "call_" + generateId(),
         type: "function",
         function: {
           name: fc.name,
-          arguments: JSON.stringify(fc.args),
+          arguments: JSON.stringify(argsOut),
         },
         extra_content: thought_signature ? {google: { thought_signature }} : undefined,
       });
