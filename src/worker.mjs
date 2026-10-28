@@ -498,11 +498,8 @@ const transformFnCalls = ({ tool_calls, extra_content }) => {
         args,
       },
     };
-    // Fix: Google API requires thought_signature (snake_case) INSIDE functionCall,
-    // not thoughtSignature (camelCase) at part root level.
-    // See: https://github.com/google-gemini/gemini-cli/issues/28697
     const sig = tc?.google?.thought_signature ?? msgSig;
-    if (sig) { out.functionCall.thought_signature = sig; }
+    if (sig) { out.thoughtSignature = sig; }
     return out;
   });
   parts.calls = calls;
@@ -645,13 +642,12 @@ const reasonsMap = { //https://ai.google.dev/api/rest/v1/GenerateContentResponse
 const SEP = "\n\n|>";
 function transformCandidates (key, cand) {
   const message = { role: "assistant", content: [] };
-  let message_level_thought_signature;
+  let thought_signature;
   for (const part of cand.content?.parts ?? []) {
     if (part.functionCall) {
       const fc = part.functionCall;
       message.tool_calls ??= [];
-      /* Fix: if model does not return signature, use dummy to skip validation per Google docs */
-      const signature = fc.thoughtSignature || "skip_thought_signature_validator";
+      const thought_signature = part.thoughtSignature ?? fc.thoughtSignature;
       message.tool_calls.push({
         id: fc.id ?? "call_" + generateId(),
         type: "function",
@@ -659,9 +655,14 @@ function transformCandidates (key, cand) {
           name: fc.name,
           arguments: JSON.stringify(fc.args),
         },
-        /* Always include thought_signature (real or dummy) to pass validation */
-        extra_content: {google: { thought_signature: signature }},
+        extra_content: thought_signature ? {google: { thought_signature }} : undefined,
       });
+    } else if (typeof part.text === "string") {
+      const len = message.content.length;
+      if (part.thought !== this.isThinking) {
+        this.isThinking = part.thought;
+        let prefix;
+        if (part.thought) {
           prefix = "<thought>\n";
         } else {
           prefix = "</thought>\n\n";
@@ -676,22 +677,24 @@ function transformCandidates (key, cand) {
         message.content[len-1] += SEP;
       }
       message.content.push(part.text);
-      if (part.thoughtSignature) {
-        message_level_thought_signature = part.thoughtSignature;
+      if (thought_signature && part.thoughtSignature) {
+        throw new Error("Unexpected multiple thoughtSignature");
       }
+      thought_signature = part.thoughtSignature;
     } else {
       throw new Error("Unexpected part type: " + JSON.stringify(part,2));
     }
   }
   message.content = message.content.join("") ?? null;
-  if (message_level_thought_signature) {
-    message.extra_content = {google: { thought_signature: message_level_thought_signature }};
+  if (thought_signature) {
+    message.extra_content = {google: { thought_signature }};
   }
   return {
-    index: cand.index ?? 0,
+    index: cand.index ?? 0, // 0-index is absent in new -002 models response
     [key]: message,
     logprobs: null,
     finish_reason: message.tool_calls ? "tool_calls" : reasonsMap[cand.finishReason] ?? cand.finishReason,
+    //original_finish_reason: cand.finishReason,
   };
 }
 
