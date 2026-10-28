@@ -459,10 +459,13 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
 
 const transformFnCalls = ({ tool_calls, extra_content }) => {
   const calls = {};
-  // Message-level signature fallback: some clients (e.g. OpenAI-compatible
-  // agents) echo the Google signature on the whole assistant message instead
-  // of per tool_call. Without it, gemini-3.x rejects the replayed
-  // functionCall with "missing a thought_signature".
+  // Message-level signature fallback: some clients echo the Google signature
+  // on the whole assistant message instead of per tool_call. gemini-3.x
+  // REPLAYS functionCall turns (requires a valid thought_signature, or a
+  // 400 "missing a thought_signature"). The API does not verify signatures
+  // on FIRST-TIME calls, so drop it when absent/invalid: first-time stays
+  // fully working, replays of unsigned history report the Google error and
+  // clients must keep the signature from the original response.
   const msgSig = extra_content?.google?.thought_signature;
   const parts = tool_calls.map(({ function: { arguments: argstr, name }, id, type, extra_content: tc }, i) => {
     if (type !== "function") {
@@ -476,14 +479,16 @@ const transformFnCalls = ({ tool_calls, extra_content }) => {
       throw new HttpError("Invalid function arguments: " + argstr, 400);
     }
     calls[id] = {i, name};
-    return {
+    const out = {
       functionCall: {
         id: id.startsWith("call_") ? null : id,
         name,
         args,
       },
-      thoughtSignature: tc?.google?.thought_signature ?? msgSig,
     };
+    const sig = tc?.google?.thought_signature ?? msgSig;
+    if (sig) { out.thoughtSignature = sig; }
+    return out;
   });
   parts.calls = calls;
   return parts;
@@ -492,6 +497,8 @@ const transformFnCalls = ({ tool_calls, extra_content }) => {
 const transformMsg = async ({ content, extra_content, tool_calls }) => {
   // tool_calls parts are handled separately by transformFnCalls; when they
   // carry no per-call signature, fall back to the message-level one.
+  // Only attach a message-level signature that actually exists; a null
+  // placeholder must not be sent (Google rejects "Corrupted thought signature").
   const hasCallSig = tool_calls?.some(tc => tc.extra_content?.google?.thought_signature);
   const thoughtSignature = extra_content?.google?.thought_signature && !hasCallSig ? extra_content.google.thought_signature : undefined;
   const parts = [];
