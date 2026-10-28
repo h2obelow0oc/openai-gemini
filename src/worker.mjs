@@ -650,8 +650,8 @@ function transformCandidates (key, cand) {
     if (part.functionCall) {
       const fc = part.functionCall;
       message.tool_calls ??= [];
-      /* Fix: directly use fc.thoughtSignature for this functionCall */
-      const fc_thought_signature = fc.thoughtSignature;
+      /* Fix: if model does not return signature, use dummy to skip validation per Google docs */
+      const signature = fc.thoughtSignature || "skip_thought_signature_validator";
       message.tool_calls.push({
         id: fc.id ?? "call_" + generateId(),
         type: "function",
@@ -659,15 +659,9 @@ function transformCandidates (key, cand) {
           name: fc.name,
           arguments: JSON.stringify(fc.args),
         },
-        /* Put thought_signature directly in this tool_call\x27s extra_content */
-        extra_content: fc.thoughtSignature ? {google: { thought_signature: fc.thoughtSignature }} : undefined,
+        /* Always include thought_signature (real or dummy) to pass validation */
+        extra_content: {google: { thought_signature: signature }},
       });
-    } else if (typeof part.text === "string") {
-      const len = message.content.length;
-      if (part.thought !== this.isThinking) {
-        this.isThinking = part.thought;
-        let prefix;
-        if (part.thought) {
           prefix = "<thought>\n";
         } else {
           prefix = "</thought>\n\n";
