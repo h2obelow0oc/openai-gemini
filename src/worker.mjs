@@ -457,9 +457,14 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
   };
 };
 
-const transformFnCalls = ({ tool_calls }) => {
+const transformFnCalls = ({ tool_calls, extra_content }) => {
   const calls = {};
-  const parts = tool_calls.map(({ function: { arguments: argstr, name }, id, type, extra_content }, i) => {
+  // Message-level signature fallback: some clients (e.g. OpenAI-compatible
+  // agents) echo the Google signature on the whole assistant message instead
+  // of per tool_call. Without it, gemini-3.x rejects the replayed
+  // functionCall with "missing a thought_signature".
+  const msgSig = extra_content?.google?.thought_signature;
+  const parts = tool_calls.map(({ function: { arguments: argstr, name }, id, type, extra_content: tc }, i) => {
     if (type !== "function") {
       throw new HttpError(`Unsupported tool_call type: "${type}"`, 400);
     }
@@ -477,7 +482,7 @@ const transformFnCalls = ({ tool_calls }) => {
         name,
         args,
       },
-      thoughtSignature: extra_content?.google?.thought_signature,
+      thoughtSignature: tc?.google?.thought_signature ?? msgSig,
     };
   });
   parts.calls = calls;
@@ -565,7 +570,7 @@ const transformMessages = async (messages) => {
     }
     contents.push({
       role: item.role,
-      parts: item.tool_calls ? transformFnCalls(item) : await transformMsg(item)
+      parts: item.tool_calls ? transformFnCalls(item, item.extra_content) : await transformMsg(item)
     });
   }
   if (system_instruction) {
