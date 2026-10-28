@@ -429,8 +429,11 @@ const transformFnResponse = ({ content, tool_call_id }, parts) => {
   try {
     response = JSON.parse(content);
   } catch (err) {
-    console.error("Error parsing function response content:", err);
-    throw new HttpError("Invalid function response: " + content, 400);
+    // Lenient fallback: plain-text tool results are common ("No files found",
+    // shell output, MCP text). Wrap as a result object instead of rejecting
+    // the whole request with 400.
+    console.error("Non-JSON function response content, wrapping:", err);
+    response = { result: typeof content === "string" ? content : String(content ?? "") };
   }
   if (typeof response !== "object" || response === null || Array.isArray(response)) {
     response = { result: response };
@@ -539,11 +542,14 @@ const transformMessages = async (messages) => {
       case "tool":
         // eslint-disable-next-line no-case-declarations
         let { role, parts } = contents[contents.length - 1] ?? {};
-        if (role !== "function") {
+        // Legacy models accepted a "function" role for function responses; the
+        // current Gemini API rejects it ("Role 'function' is not supported").
+        // Send functionResponse parts in a user turn instead.
+        if (role !== "user") {
           const calls = parts?.calls;
           parts = []; parts.calls = calls;
           contents.push({
-            role: "function", // ignored
+            role: "user",
             parts
           });
         }
