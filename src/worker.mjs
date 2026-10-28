@@ -393,8 +393,13 @@ const transformConfig = (req, isV3) => {
   return cfg;
 };
 
-const parseImg = async (url) => {
-  let mimeType, data;
+const MIME_PREFIX = {
+  "image/": "image",
+  "video/": "video",
+  "audio/": "audio",
+};
+const parseMedia = async (url) => {
+  let mimeType, data, isBase64 = true;
   if (url.startsWith("http://") || url.startsWith("https://")) {
     try {
       const response = await fetch(url);
@@ -404,14 +409,21 @@ const parseImg = async (url) => {
       mimeType = response.headers.get("content-type");
       data = Buffer.from(await response.arrayBuffer()).toString("base64");
     } catch (err) {
-      throw new Error("Error fetching image: " + err.toString());
+      throw new Error("Error fetching media: " + err.toString());
     }
   } else {
     const match = url.match(/^data:(?<mimeType>.*?)(;base64)?,(?<data>.*)$/);
     if (!match) {
-      throw new HttpError("Invalid image data: " + url, 400);
+      throw new HttpError("Invalid media data URL: " + url, 400);
     }
     ({ mimeType, data } = match.groups);
+    isBase64 = !!match[2];
+  }
+  if (!isBase64) {
+    data = Buffer.from(decodeURIComponent(data)).toString("base64");
+  }
+  if (!Object.keys(MIME_PREFIX).some((p) => mimeType?.startsWith(p))) {
+    throw new HttpError("Unsupported media type: " + mimeType, 400);
   }
   return {
     inlineData: {
@@ -518,15 +530,8 @@ const transformMsg = async ({ content, extra_content, tool_calls }) => {
         parts.push({ text: item.text });
         break;
       case "image_url":
-        parts.push(await parseImg(item.image_url.url));
-        break;
       case "input_audio":
-        parts.push({
-          inlineData: {
-            mimeType: "audio/" + item.input_audio.format,
-            data: item.input_audio.data,
-          }
-        });
+        parts.push(await parseMedia(item.image_url?.url ?? item.input_audio?.data));
         break;
       default:
         throw new HttpError(`Unknown "content" item type: "${item.type}"`, 400);
@@ -539,7 +544,7 @@ const transformMsg = async ({ content, extra_content, tool_calls }) => {
       parts.push({ text:"", thoughtSignature });
     }
   }
-  if (content.every(item => item.type === "image_url")) {
+  if (content.every(item => item.type === "image_url" || item.type === "input_audio")) {
     parts.push({ text: "" }); // to avoid "Unable to submit request because it must have a text parameter"
   }
   return parts;
