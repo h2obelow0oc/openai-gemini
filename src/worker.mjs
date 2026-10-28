@@ -645,12 +645,13 @@ const reasonsMap = { //https://ai.google.dev/api/rest/v1/GenerateContentResponse
 const SEP = "\n\n|>";
 function transformCandidates (key, cand) {
   const message = { role: "assistant", content: [] };
-  let thought_signature;
+  let message_level_thought_signature;
   for (const part of cand.content?.parts ?? []) {
     if (part.functionCall) {
       const fc = part.functionCall;
       message.tool_calls ??= [];
-      const thought_signature = fc.thoughtSignature;
+      /* Fix: directly use fc.thoughtSignature for this functionCall */
+      const fc_thought_signature = fc.thoughtSignature;
       message.tool_calls.push({
         id: fc.id ?? "call_" + generateId(),
         type: "function",
@@ -658,7 +659,8 @@ function transformCandidates (key, cand) {
           name: fc.name,
           arguments: JSON.stringify(fc.args),
         },
-        extra_content: thought_signature ? {google: { thought_signature }} : undefined,
+        /* Put thought_signature directly in this tool_call\x27s extra_content */
+        extra_content: fc.thoughtSignature ? {google: { thought_signature: fc.thoughtSignature }} : undefined,
       });
     } else if (typeof part.text === "string") {
       const len = message.content.length;
@@ -680,24 +682,22 @@ function transformCandidates (key, cand) {
         message.content[len-1] += SEP;
       }
       message.content.push(part.text);
-      if (thought_signature && part.thoughtSignature) {
-        throw new Error("Unexpected multiple thoughtSignature");
+      if (part.thoughtSignature) {
+        message_level_thought_signature = part.thoughtSignature;
       }
-      thought_signature = part.thoughtSignature;
     } else {
       throw new Error("Unexpected part type: " + JSON.stringify(part,2));
     }
   }
   message.content = message.content.join("") ?? null;
-  if (thought_signature) {
-    message.extra_content = {google: { thought_signature }};
+  if (message_level_thought_signature) {
+    message.extra_content = {google: { thought_signature: message_level_thought_signature }};
   }
   return {
-    index: cand.index ?? 0, // 0-index is absent in new -002 models response
+    index: cand.index ?? 0,
     [key]: message,
     logprobs: null,
     finish_reason: message.tool_calls ? "tool_calls" : reasonsMap[cand.finishReason] ?? cand.finishReason,
-    //original_finish_reason: cand.finishReason,
   };
 }
 
